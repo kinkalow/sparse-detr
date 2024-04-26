@@ -75,13 +75,13 @@ class BackboneBase(nn.Module):
         # TODO: args -> duplicated args
         super().__init__()
         if 'none' in args.backbone:
-            self.strides = [1]  # not used, actually (length only matters)  
+            self.strides = [1]  # not used, actually (length only matters)
             self.num_channels = [3]
             return_layers = self.get_return_layers('identity', (0,))
             self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
 
         elif 'resnet' in args.backbone:
-            
+
             if not args.backbone_from_scratch and not args.finetune_early_layers:
                 print("Freeze early layers.")
                 for name, parameter in backbone.named_parameters():
@@ -89,7 +89,7 @@ class BackboneBase(nn.Module):
                         parameter.requires_grad_(False)
             else:
                 print('Finetune early layers as well.')
-                    
+
             layer_name = "layer"
             if return_interm_layers:
                 return_layers = self.get_return_layers(layer_name, (2, 3, 4))
@@ -100,7 +100,7 @@ class BackboneBase(nn.Module):
                 self.strides = [32]
                 self.num_channels = [2048]
             self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
-                
+
         elif 'swin' in args.backbone:
             if return_interm_layers:
                 num_channels = [int(backbone.embed_dim * 2 ** i) for i in range(backbone.num_layers)]
@@ -112,10 +112,10 @@ class BackboneBase(nn.Module):
                 self.strides = [32]
                 self.num_channels = num_channels[-1]
             self.body = backbone
-                
+
         else:
             raise ValueError(f"Unknown backbone name: {args.backbone}")
-        
+
     @staticmethod
     def get_return_layers(name: str, layer_ids):
         return {name + str(n): str(i) for i, n in enumerate(layer_ids)}
@@ -129,8 +129,8 @@ class BackboneBase(nn.Module):
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
             out[name] = NestedTensor(x, mask)
         return out
-    
-    
+
+
 class DummyBackbone(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -139,6 +139,7 @@ class DummyBackbone(torch.nn.Module):
 
 class Backbone(BackboneBase):
     """ResNet backbone with frozen BatchNorm."""
+
     def __init__(self, name: str,
                  train_backbone: bool,
                  return_interm_layers: bool,
@@ -150,7 +151,7 @@ class Backbone(BackboneBase):
             print("Train backbone from scratch.")
         else:
             print("Load pretrained weights")
-        
+
         if "none" in name:
             backbone = DummyBackbone()
         elif "resnet" in name:
@@ -170,30 +171,30 @@ class Backbone(BackboneBase):
                 out_indices = [1, 2, 3]
             else:
                 out_indices = [3]
-                
+
             backbone = swin_transformer.build_model(
                 name, out_indices=out_indices, frozen_stages=frozen_stages, pretrained=pretrained)
         else:
             raise ValueError(f"Unknown backbone name: {args.backbone}")
-            
+
         if args.scrl_pretrained_path:
             assert "resnet" in name, "Currently only resnet50 is available."
             ckpt = torch.load(args.scrl_pretrained_path, map_location="cpu")
             translate_map = {
-                "encoder.0" : "conv1",
-                "encoder.1" : "bn1",
-                "encoder.4" : "layer1",
-                "encoder.5" : "layer2",
-                "encoder.6" : "layer3",
-                "encoder.7" : "layer4",
+                "encoder.0": "conv1",
+                "encoder.1": "bn1",
+                "encoder.4": "layer1",
+                "encoder.5": "layer2",
+                "encoder.6": "layer3",
+                "encoder.7": "layer4",
             }
             state_dict = {
-                translate_map[k[:9]] + k[9:] : v
+                translate_map[k[:9]] + k[9:]: v
                 for k, v in ckpt["online_network_state_dict"].items()
                 if "encoder" in k
             }
             backbone.load_state_dict(state_dict, strict=False)
-        
+
         super().__init__(backbone, train_backbone, return_interm_layers, args)
         if dilation and "resnet" in name:
             self.strides[-1] = self.strides[-1] // 2
@@ -217,8 +218,8 @@ class Joiner(nn.Sequential):
             pos.append(self[1](x).to(x.tensors.dtype))
 
         return out, pos
-    
-    
+
+
 def test_backbone(backbone):
     imgs = [
         torch.randn(2, 3, 633, 122),
@@ -231,8 +232,8 @@ def test_backbone(backbone):
 def build_backbone(args):
     # test_backbone(torchvision.models.resnet50())
     position_embedding = build_position_encoding(args)
-    train_backbone = args.lr_backbone > 0
-    return_interm_layers = args.masks or (args.num_feature_levels > 1)
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, args)
+    train_backbone = args.lr_backbone > 0  # True(default) ... lr_backbone=2e-5
+    return_interm_layers = args.masks or (args.num_feature_levels > 1)  # True(default) ... masks=False ... num_feature_levels=4
+    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation, args)  # dilation=False(default)
     model = Joiner(backbone, position_embedding)
     return model

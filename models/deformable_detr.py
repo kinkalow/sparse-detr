@@ -39,6 +39,7 @@ def _get_clones(module, N):
 
 class DeformableDETR(nn.Module):
     """ This is the Deformable DETR module that performs object detection """
+
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
                  aux_loss=True, with_box_refine=False, two_stage=False, args=None):
         """ Initializes the model.
@@ -58,12 +59,13 @@ class DeformableDETR(nn.Module):
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, output_dim=4, num_layers=3)
-        self.num_feature_levels = num_feature_levels
+        self.num_feature_levels = num_feature_levels  # 4(default)
         if not two_stage:
+            # デフォルトはここを実行
             self.query_embed = nn.Embedding(num_queries, hidden_dim * 2)
             # will be splited into query_embed(query_pos) & tgt later
         if num_feature_levels > 1:
-            num_backbone_outs = len(backbone.strides)
+            num_backbone_outs = len(backbone.strides)  # 3 or 1
             input_proj_list = []
             for _ in range(num_backbone_outs):
                 in_channels = backbone.num_channels[_]
@@ -86,10 +88,10 @@ class DeformableDETR(nn.Module):
                 )])
         self.backbone = backbone
         self.aux_loss = aux_loss
-        self.with_box_refine = with_box_refine
-        self.two_stage = two_stage
+        self.with_box_refine = with_box_refine  # False(default)
+        self.two_stage = two_stage  # False(default)
 
-        self.use_enc_aux_loss = args.use_enc_aux_loss
+        self.use_enc_aux_loss = args.use_enc_aux_loss  # False(default)
         self.rho = args.rho
 
         prior_prob = 0.01
@@ -100,21 +102,21 @@ class DeformableDETR(nn.Module):
         for proj in self.input_proj:
             nn.init.xavier_uniform_(proj[0].weight, gain=1)
             nn.init.constant_(proj[0].bias, 0)
- 
+
         # hack implementation: a list of embedding heads (see the order)
         # n: dec_layers / m: enc_layers
         # [dec_0, dec_1, ..., dec_n-1, encoder, backbone, enc_0, enc_1, ..., enc_m-2]
-        
+
         # at each layer of decoder (by default)
-        num_pred = transformer.decoder.num_layers
-        if self.two_stage:
+        num_pred = transformer.decoder.num_layers  # 6(default)
+        if self.two_stage:  # False
             # at the end of encoder
-            num_pred += 1  
-        if self.use_enc_aux_loss:
+            num_pred += 1
+        if self.use_enc_aux_loss:  # False
             # at each layer of encoder (excl. the last)
-            num_pred += transformer.encoder.num_layers - 1  
-        
-        if with_box_refine or self.use_enc_aux_loss:
+            num_pred += transformer.encoder.num_layers - 1
+
+        if with_box_refine or self.use_enc_aux_loss:  # False
             # individual heads with the same initialization
             self.class_embed = _get_clones(self.class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
@@ -124,20 +126,20 @@ class DeformableDETR(nn.Module):
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             self.class_embed = nn.ModuleList([self.class_embed for _ in range(num_pred)])
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
-            
-        if two_stage:
+
+        if two_stage:  # False
             # hack implementation
             self.transformer.decoder.class_embed = self.class_embed
-            self.transformer.decoder.bbox_embed = self.bbox_embed            
+            self.transformer.decoder.bbox_embed = self.bbox_embed
             for box_embed in self.transformer.decoder.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
-                
-        if self.use_enc_aux_loss:
+
+        if self.use_enc_aux_loss:  # False
             # the output from the last layer should be specially treated as an input of decoder
             num_layers_excluding_the_last = transformer.encoder.num_layers - 1
             self.transformer.encoder.aux_heads = True
             self.transformer.encoder.class_embed = self.class_embed[-num_layers_excluding_the_last:]
-            self.transformer.encoder.bbox_embed = self.bbox_embed[-num_layers_excluding_the_last:] 
+            self.transformer.encoder.bbox_embed = self.bbox_embed[-num_layers_excluding_the_last:]
             for box_embed in self.transformer.encoder.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
 
@@ -164,20 +166,20 @@ class DeformableDETR(nn.Module):
 
         srcs = []
         masks = []
-        
+
         # multi-scale features projected from ~C5 with 1x1 conv
         for l, feat in enumerate(features):
             src, mask = feat.decompose()
             srcs.append(self.input_proj[l](src))
             masks.append(mask)
             assert mask is not None
-            
+
         # multi-scale features smaller than C5 projected with 2 strided 3x3 conv
-        if self.num_feature_levels > len(srcs):
+        if self.num_feature_levels > len(srcs):  # 4>1or3
             _len_srcs = len(srcs)
             for l in range(_len_srcs, self.num_feature_levels):
                 if l == _len_srcs:
-                    # feature scale 1/32 
+                    # feature scale 1/32
                     src = self.input_proj[l](features[-1].tensors)
                 else:
                     # feature scale <1/64: recursively downsample the last projection
@@ -194,11 +196,11 @@ class DeformableDETR(nn.Module):
         query_embeds = None
         if not self.two_stage:
             query_embeds = self.query_embed.weight
-        (hs, init_reference, inter_references, 
-         enc_outputs_class, enc_outputs_coord_unact, 
+        (hs, init_reference, inter_references,
+         enc_outputs_class, enc_outputs_coord_unact,
          backbone_mask_prediction,
-         enc_inter_outputs_class, enc_inter_outputs_coord, 
-         sampling_locations_enc, attn_weights_enc, 
+         enc_inter_outputs_class, enc_inter_outputs_coord,
+         sampling_locations_enc, attn_weights_enc,
          sampling_locations_dec, attn_weights_dec,
          backbone_topk_proposals, spatial_shapes, level_start_index) = \
             self.transformer(srcs, masks, pos, query_embeds)
@@ -211,7 +213,7 @@ class DeformableDETR(nn.Module):
             # lvl: level of decoding layer
             outputs_class = self.class_embed[lvl](hs[lvl])
             outputs_coord = self.bbox_embed[lvl](hs[lvl])
-            
+
             assert init_reference is not None and inter_references is not None
             if lvl == 0:
                 reference = init_reference
@@ -223,11 +225,11 @@ class DeformableDETR(nn.Module):
             else:
                 assert reference.shape[-1] == 2
                 outputs_coord[..., :2] += reference
-            
+
             outputs_coord = outputs_coord.sigmoid()
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
-            
+
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
 
@@ -244,7 +246,7 @@ class DeformableDETR(nn.Module):
         }
         if backbone_topk_proposals is not None:
             out["backbone_topk_proposals"] = backbone_topk_proposals
-        
+
         if self.aux_loss:
             # make loss from every intermediate layers (excluding the last one)
             out['aux_outputs'] = self._set_aux_loss(outputs_class[:-1], outputs_coord[:-1])
@@ -255,10 +257,10 @@ class DeformableDETR(nn.Module):
 
         if self.rho:
             out["backbone_mask_prediction"] = backbone_mask_prediction
-            
+
         if self.use_enc_aux_loss:
             out['aux_outputs_enc'] = self._set_aux_loss(enc_inter_outputs_class, enc_inter_outputs_coord)
-        
+
         if self.rho:
             out["sparse_token_nums"] = self.transformer.sparse_token_nums
 
@@ -281,6 +283,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
+
     def __init__(self, num_classes, matcher, weight_dict, losses, args):
         """ Create the criterion.
         Parameters:
@@ -316,7 +319,7 @@ class SetCriterion(nn.Module):
                                             dtype=src_logits.dtype, layout=src_logits.layout, device=src_logits.device)
         target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
 
-        target_classes_onehot = target_classes_onehot[:,:,:-1]
+        target_classes_onehot = target_classes_onehot[:, :, :-1]
         loss_ce = sigmoid_focal_loss(src_logits, target_classes_onehot, num_boxes, alpha=self.focal_alpha, gamma=2)
         loss_ce = loss_ce * src_logits.shape[1]
         losses = {'loss_ce': loss_ce}
@@ -389,7 +392,7 @@ class SetCriterion(nn.Module):
             "loss_dice": dice_loss(src_masks, target_masks, num_boxes),
         }
         return losses
-    
+
     def loss_mask_prediction(self, outputs, targets, indices, num_boxes, layer=None):
         assert "backbone_mask_prediction" in outputs
         assert "sampling_locations_dec" in outputs
@@ -397,7 +400,7 @@ class SetCriterion(nn.Module):
         assert "spatial_shapes" in outputs
         assert "level_start_index" in outputs
 
-        mask_prediction = outputs["backbone_mask_prediction"] 
+        mask_prediction = outputs["backbone_mask_prediction"]
         loss_key = "loss_mask_prediction"
 
         sampling_locations_dec = outputs["sampling_locations_dec"]
@@ -406,14 +409,14 @@ class SetCriterion(nn.Module):
         level_start_index = outputs["level_start_index"]
 
         flat_grid_attn_map_dec = attn_map_to_flat_grid(
-            spatial_shapes, level_start_index, sampling_locations_dec, attn_weights_dec).sum(dim=(1,2))
+            spatial_shapes, level_start_index, sampling_locations_dec, attn_weights_dec).sum(dim=(1, 2))
 
         losses = {}
 
         if 'mask_flatten' in outputs:
             flat_grid_attn_map_dec = flat_grid_attn_map_dec.masked_fill(
-                outputs['mask_flatten'], flat_grid_attn_map_dec.min()-1)
-                
+                outputs['mask_flatten'], flat_grid_attn_map_dec.min() - 1)
+
         sparse_token_nums = outputs["sparse_token_nums"]
         num_topk = sparse_token_nums.max()
 
@@ -445,7 +448,7 @@ class SetCriterion(nn.Module):
 
         flat_grid_topk = idx_to_flat_grid(spatial_shapes, backbone_topk_proposals)
         flat_grid_attn_map_dec = attn_map_to_flat_grid(
-            spatial_shapes, level_start_index, sampling_locations_dec, attn_weights_dec).sum(dim=(1,2))
+            spatial_shapes, level_start_index, sampling_locations_dec, attn_weights_dec).sum(dim=(1, 2))
         corr = compute_corr(flat_grid_topk, flat_grid_attn_map_dec, spatial_shapes)
 
         losses = {}
@@ -485,7 +488,7 @@ class SetCriterion(nn.Module):
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
-        outputs_without_aux = {k: v for k, v in outputs.items() 
+        outputs_without_aux = {k: v for k, v in outputs.items()
                                if k not in ['aux_outputs', 'enc_outputs', 'backbone_outputs', 'mask_flatten']}
 
         # Retrieve the matching between the outputs of the last layer and the targets
@@ -557,7 +560,7 @@ class SetCriterion(nn.Module):
                 l_dict = self.get_loss(loss, backbone_outputs, bin_targets, indices, num_boxes, **kwargs)
                 l_dict = {k + f'_backbone': v for k, v in l_dict.items()}
                 losses.update(l_dict)
-                
+
         if 'aux_outputs_enc' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs_enc']):
                 indices = self.matcher(aux_outputs, targets)
@@ -599,7 +602,7 @@ class PostProcess(nn.Module):
         topk_boxes = topk_indexes // out_logits.shape[2]
         labels = topk_indexes % out_logits.shape[2]
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
-        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
+        boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, 4))
 
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
@@ -655,24 +658,24 @@ def build(args):
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
         weight_dict["loss_dice"] = args.dice_loss_coef
-        
+
     # TODO this is a hack
     aux_weight_dict = {}
-    
-    if args.aux_loss:
+
+    if args.aux_loss:  # True
         for i in range(args.dec_layers - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
-            
+
     if args.two_stage:
         aux_weight_dict.update({k + f'_enc': v for k, v in weight_dict.items()})
-        
+
     if args.use_enc_aux_loss:
         for i in range(args.enc_layers - 1):
             aux_weight_dict.update({k + f'_enc_{i}': v for k, v in weight_dict.items()})
-            
+
     if args.rho:
         aux_weight_dict.update({k + f'_backbone': v for k, v in weight_dict.items()})
-        
+
     if aux_weight_dict:
         weight_dict.update(aux_weight_dict)
 
@@ -683,7 +686,7 @@ def build(args):
         losses += ["masks"]
     if args.rho:
         losses += ["mask_prediction"]
-    
+
     # num_classes, matcher, weight_dict, losses, focal_alpha=0.25
     criterion = SetCriterion(num_classes, matcher, weight_dict, losses, args)
     criterion.to(device)
